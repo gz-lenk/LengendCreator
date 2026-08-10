@@ -1,9 +1,9 @@
 {
-  "id": "nested-page-tree",
-  "name": "Nested Page Tree",
-  "version": "0.2.0",
+  "id": "lengend-creator",
+  "name": "Lengend Creator",
+  "version": "0.4.0",
   "minAppVersion": "1.7.2",
-  "description": "Manage ordinary Markdown notes as an infinitely nestable page tree.",
-  "author": "Nested Page Tree contributors",
+  "description": "An integrated worldbuilding toolkit for Obsidian, starting with infinitely nested page trees.",
+  "author": "gz-lenk",
   "isDesktopOnly": false
 }

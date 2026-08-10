@@ -1,8 +1,8 @@
 {
-  "name": "nested-page-tree",
-  "version": "0.2.0",
+  "name": "lengend-creator",
+  "version": "0.4.0",
   "private": true,
-  "description": "An Obsidian plugin for managing Markdown notes as a nested page tree.",
+  "description": "An integrated worldbuilding toolkit for Obsidian.",
   "main": "main.js",
   "scripts": {
     "check": "node --check main.js",

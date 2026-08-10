@@ -1,10 +1,10 @@
 # Lengend Creator
 
-Lengend Creator 是一个面向 Obsidian 的知识组织插件，目标是在保留普通 Markdown 文件和真实文件系统的前提下，提供接近 LegendKeeper 的页面式创作体验。
+Lengend Creator 是一个集成一系列世界观构筑功能的 Obsidian 插件。它希望把页面组织、视觉标识以及后续的世界设定工具集中在同一个创作环境中，同时保留普通 Markdown 文件和真实文件系统。
 
-用户只需要关注页面、子页面和内容之间的关系，不必手动规划文件夹、移动文件或维护复杂的本地目录。插件负责将逻辑页面树同步为清晰、可访问的物理文件结构，数据不会脱离 Obsidian Vault。
+Lengend Creator 不只是一个页面树插件。Page Tree 是项目的第一个基础模块：用户只需要关注页面、子页面和内容之间的关系，不必手动规划文件夹、移动文件或维护复杂的本地目录。未来的功能会在这个内容结构之上继续扩展，而数据始终保留在 Obsidian Vault 中。
 
-> 项目目前处于早期开发阶段。第一个核心功能 Page Tree 已经完成，Icon System 是下一个主要开发阶段。
+> 项目目前处于早期开发阶段。Page Tree 与 Icon System 两个核心功能已经完成。
 
 ## 项目目标
 
@@ -12,7 +12,8 @@ Lengend Creator 是一个面向 Obsidian 的知识组织插件，目标是在保
 - 每个页面仍然是普通 Markdown 文件，可被 Obsidian 和其他工具直接读取。
 - 逻辑层级与本地文件结构保持一致，不创建脱离 Vault 的虚拟树。
 - 页面移动、重命名和层级变化由插件自动同步到文件系统。
-- 在 Obsidian 原生体验之上逐步增加图标、视觉识别和世界构建工具。
+- 以模块化方式集成图标、视觉识别和更多世界观构筑工具。
+- 让不同构筑模块共享同一套页面数据，而不是形成彼此割裂的插件功能。
 
 ## 当前进度
 
@@ -29,11 +30,11 @@ Lengend Creator 是一个面向 Obsidian 的知识组织插件，目标是在保
 - 文档标题、页面树标题、文件名和物理路径保持同步。
 - 自动将逻辑页面树映射到 `main` 下的真实文件夹结构。
 
-### 下一阶段：Icon System
+### 已完成：Icon System
 
-计划为每个页面增加独立图标，并提供：
+每个页面可以通过右键菜单设置独立图标：
 
-- 可搜索的 Obsidian 原生 Lucide 图标选择器。
+- 默认提供可搜索的 Obsidian 原生 Lucide 图标选择器。
 - 可选 Emoji 图标。
 - 清除图标和恢复默认图标。
 - 图标作为独立页面属性保存，不进入标题或文件名。
@@ -49,6 +50,7 @@ page-tree: true
 page-tree-id: 78df83c4-5ba3-4cf7-8d08-143a079ce721
 page-tree-parent: 50cc3318-8d7e-4bf6-9099-b94fae8f7703
 page-tree-order: 2048
+page-tree-icon: lucide:castle
 title: 子页面
 ---
 ```
@@ -78,17 +80,18 @@ main/
 
 ## 使用方式
 
-启用插件后，在命令面板执行 **Nested Page Tree: 打开页面树**，也可以点击左侧功能区的页面树图标。
+启用插件后，在命令面板执行 **Lengend Creator: 打开页面树**，也可以点击左侧功能区的页面树图标。
 
 - 点击工具栏中的加号创建顶层页面。
 - 右键页面可以创建子页面、重命名、移动到顶层或删除。
+- 右键页面并选择“更换图标”，可以使用官方图标或单个 Emoji。
 - 拖到页面行中部会成为其子页面。
 - 拖到页面行上方或下方会调整同级顺序。
 - Markdown 文件可以通过 Obsidian 文件列表的右键菜单加入页面树。
 
 ## 安装
 
-项目尚未发布到 Obsidian 社区插件市场。手动安装时，将以下运行文件放入 Vault 的 `.obsidian/plugins/nested-page-tree/`：
+项目尚未发布到 Obsidian 社区插件市场。手动安装时，将以下运行文件放入 Vault 的 `.obsidian/plugins/lengend-creator/`：
 
 ```text
 main.js
@@ -96,7 +99,7 @@ manifest.json
 styles.css
 ```
 
-然后重新加载 Obsidian，并在“设置 → 第三方插件”中启用 **Nested Page Tree**。
+然后重新加载 Obsidian，并在“设置 → 第三方插件”中启用 **Lengend Creator**。
 
 ## 开发
 
@@ -109,9 +112,9 @@ npm test
 
 核心文件：
 
-- `main.js`：页面模型、物理目录协调器和页面树交互。
-- `styles.css`：页面树及弹窗样式。
-- `tests/core.test.cjs`：层级、排序、循环检测和物理路径规划测试。
+- `main.js`：页面模型、物理目录协调器、页面树交互和图标选择器。
+- `styles.css`：页面树及图标选择弹窗样式。
+- `tests/core.test.cjs`：层级、排序、循环检测、图标格式和物理路径规划测试。
 - `manifest.json`：Obsidian 插件清单。
 
 最低 Obsidian 版本为 `1.7.2`，插件不依赖桌面端专用 API。
@@ -122,7 +125,7 @@ npm test
 - [x] 页面创建、重命名、拖拽、删除和搜索。
 - [x] YAML 管理属性自动隐藏。
 - [x] 逻辑树与 `main` 物理目录双向协调。
-- [ ] Icon System：原生图标与 Emoji。
+- [x] Icon System：原生图标与 Emoji。
 - [ ] 更完整的页面外观与编辑体验。
 - [ ] 发布、迁移和恢复工具。
 

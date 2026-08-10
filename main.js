@@ -8,6 +8,8 @@ const {
   Setting,
   TFile,
   TFolder,
+  getIcon,
+  getIconIds,
   normalizePath,
   setIcon,
 } = require("obsidian");
@@ -18,8 +20,43 @@ const META_ID = "page-tree-id";
 const META_PARENT = "page-tree-parent";
 const META_ORDER = "page-tree-order";
 const META_TITLE = "title";
+const META_ICON = "page-tree-icon";
+const DEFAULT_PAGE_ICON = "file-text";
+const ICON_RENDER_BATCH_SIZE = 180;
 const ORDER_STEP = 1024;
 const MIN_ORDER_GAP = 0.000001;
+const COMMON_PAGE_EMOJIS = [
+  "🌍",
+  "🗺️",
+  "🏰",
+  "🏛️",
+  "🏘️",
+  "⛰️",
+  "🌲",
+  "🌊",
+  "☀️",
+  "🌙",
+  "⭐",
+  "🔥",
+  "⚔️",
+  "🛡️",
+  "👑",
+  "💎",
+  "🗝️",
+  "📜",
+  "📖",
+  "✉️",
+  "🧭",
+  "⏳",
+  "🔮",
+  "🧪",
+  "🧙",
+  "🧝",
+  "🐉",
+  "👤",
+  "❤️",
+  "⚠️",
+];
 
 const DEFAULT_SETTINGS = {
   managedFolder: "main",
@@ -41,6 +78,72 @@ function normalizeParentId(value) {
   return parentId || null;
 }
 
+function isSingleEmoji(value) {
+  if (!/[\p{Extended_Pictographic}\p{Regional_Indicator}\u20e3]/u.test(value)) return false;
+  if (typeof Intl.Segmenter !== "function") return Array.from(value).length <= 12;
+  const segments = [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(value)];
+  return segments.length === 1;
+}
+
+function normalizePageIcon(value) {
+  const raw = textValue(value);
+  if (!raw) return null;
+
+  if (raw.startsWith("lucide:")) {
+    const iconId = raw.slice("lucide:".length).trim().toLocaleLowerCase();
+    return /^[a-z0-9-]+$/.test(iconId) ? `lucide:${iconId}` : null;
+  }
+
+  if (raw.startsWith("emoji:")) {
+    const emoji = raw.slice("emoji:".length).trim();
+    if (!emoji || Array.from(emoji).length > 32 || !isSingleEmoji(emoji)) return null;
+    return `emoji:${emoji}`;
+  }
+
+  return null;
+}
+
+function parsePageIcon(value) {
+  const normalized = normalizePageIcon(value);
+  if (!normalized) return null;
+  const separatorIndex = normalized.indexOf(":");
+  return {
+    type: normalized.slice(0, separatorIndex),
+    value: normalized.slice(separatorIndex + 1),
+  };
+}
+
+function renderPageIcon(element, value) {
+  element.empty();
+  element.removeClass("is-emoji");
+  const icon = parsePageIcon(value);
+
+  if (icon?.type === "emoji") {
+    element.addClass("is-emoji");
+    element.setText(icon.value);
+    return;
+  }
+
+  if (icon?.type === "lucide") {
+    const svg = getIcon(icon.value);
+    if (svg) {
+      element.appendChild(svg);
+      return;
+    }
+  }
+
+  setIcon(element, DEFAULT_PAGE_ICON);
+}
+
+function getOfficialIconChoices() {
+  const registeredIds = getIconIds().map((iconId) => String(iconId));
+  const prefixedIds = registeredIds.filter((iconId) => iconId.startsWith("lucide-"));
+  const candidates = prefixedIds.length > 0
+    ? prefixedIds.map((iconId) => iconId.slice("lucide-".length))
+    : registeredIds.filter((iconId) => /^[a-z0-9-]+$/.test(iconId));
+  return [...new Set(candidates)].sort((left, right) => left.localeCompare(right));
+}
+
 function parsePageMetadata(file, frontmatter) {
   if (!frontmatter || typeof frontmatter !== "object") return null;
 
@@ -55,6 +158,7 @@ function parsePageMetadata(file, frontmatter) {
     parentId: normalizeParentId(frontmatter[META_PARENT]),
     order: Number.isFinite(parsedOrder) ? parsedOrder : 0,
     title: textValue(frontmatter[META_TITLE]) || file.basename,
+    icon: normalizePageIcon(frontmatter[META_ICON]),
     file,
   };
 }
@@ -664,7 +768,7 @@ class PageRepository {
       .join("\n");
 
     const file = await this.app.vault.create(path, content);
-    const node = { id, parentId, order, title: normalizedTitle, file };
+    const node = { id, parentId, order, title: normalizedTitle, icon: null, file };
     this.nodesById.set(id, node);
     this.idByPath.set(file.path, id);
     this.rebuildChildrenIndex();
@@ -686,6 +790,7 @@ class PageRepository {
       parentId,
       order: this.getEndOrder(parentId),
       title: file.basename,
+      icon: null,
       file,
     };
     await this.writeNode(node, {}, false);
@@ -706,6 +811,8 @@ class PageRepository {
       else delete frontmatter[META_PARENT];
       frontmatter[META_ORDER] = nextNode.order;
       frontmatter[META_TITLE] = nextNode.title;
+      if (nextNode.icon) frontmatter[META_ICON] = nextNode.icon;
+      else delete frontmatter[META_ICON];
     });
 
     Object.assign(node, changes);
@@ -725,6 +832,16 @@ class PageRepository {
 
     await this.writeNode(node, { title: normalizedTitle });
     await this.syncPhysicalTree();
+    return node;
+  }
+
+  async setPageIcon(id, icon) {
+    const node = this.getNode(id);
+    if (!node) throw new Error("页面不存在");
+
+    const normalizedIcon = normalizePageIcon(icon);
+    if (textValue(icon) && !normalizedIcon) throw new Error("图标格式无效");
+    await this.writeNode(node, { icon: normalizedIcon });
     return node;
   }
 
@@ -859,6 +976,179 @@ class TextPromptModal extends Modal {
   }
 }
 
+class PageIconPickerModal extends Modal {
+  constructor(app, node, resolve) {
+    super(app);
+    this.node = node;
+    this.resolveIcon = resolve;
+    this.currentIcon = normalizePageIcon(node.icon);
+    this.resolved = false;
+    this.modeButtons = new Map();
+  }
+
+  onOpen() {
+    this.modalEl.addClass("npt-icon-picker-modal");
+    this.titleEl.setText("更换图标");
+    this.contentEl.empty();
+
+    const pageHeader = this.contentEl.createDiv({ cls: "npt-icon-picker-page" });
+    const preview = pageHeader.createSpan({ cls: "npt-icon-picker-preview" });
+    renderPageIcon(preview, this.currentIcon);
+    pageHeader.createSpan({ text: this.node.title, cls: "npt-icon-picker-title" });
+
+    const modeSwitch = this.contentEl.createDiv({ cls: "npt-icon-mode-switch" });
+    this.createModeButton(modeSwitch, "lucide", "官方图标");
+    this.createModeButton(modeSwitch, "emoji", "Emoji");
+
+    this.modeContentEl = this.contentEl.createDiv({ cls: "npt-icon-mode-content" });
+
+    const actions = this.contentEl.createDiv({ cls: "npt-icon-picker-actions" });
+    const resetButton = actions.createEl("button", {
+      text: "恢复默认",
+      attr: { type: "button" },
+    });
+    resetButton.disabled = !this.currentIcon;
+    resetButton.addEventListener("click", () => this.finish(null));
+    const cancelButton = actions.createEl("button", {
+      text: "取消",
+      attr: { type: "button" },
+    });
+    cancelButton.addEventListener("click", () => this.close());
+
+    const initialMode = parsePageIcon(this.currentIcon)?.type === "emoji" ? "emoji" : "lucide";
+    this.setMode(initialMode);
+  }
+
+  createModeButton(container, mode, label) {
+    const button = container.createEl("button", {
+      text: label,
+      attr: { type: "button", "aria-pressed": "false" },
+    });
+    button.addEventListener("click", () => this.setMode(mode));
+    this.modeButtons.set(mode, button);
+  }
+
+  setMode(mode) {
+    this.mode = mode;
+    for (const [buttonMode, button] of this.modeButtons) {
+      const active = buttonMode === mode;
+      button.toggleClass("is-active", active);
+      button.setAttr("aria-pressed", String(active));
+    }
+
+    this.modeContentEl.empty();
+    if (mode === "emoji") this.renderEmojiMode();
+    else this.renderLucideMode();
+  }
+
+  renderLucideMode() {
+    const search = this.modeContentEl.createDiv({ cls: "npt-icon-picker-search" });
+    const searchIcon = search.createSpan();
+    setIcon(searchIcon, "search");
+    const input = search.createEl("input", {
+      attr: { type: "search", placeholder: "搜索图标", "aria-label": "搜索官方图标" },
+    });
+    const grid = this.modeContentEl.createDiv({ cls: "npt-icon-grid" });
+    const iconIds = getOfficialIconChoices();
+    const selected = parsePageIcon(this.currentIcon);
+    if (selected?.type === "lucide") {
+      const selectedIndex = iconIds.indexOf(selected.value);
+      if (selectedIndex > 0) iconIds.unshift(...iconIds.splice(selectedIndex, 1));
+    }
+    let matches = [];
+    let renderedCount = 0;
+
+    const appendNextBatch = () => {
+      const nextIcons = matches.slice(renderedCount, renderedCount + ICON_RENDER_BATCH_SIZE);
+      for (const iconId of nextIcons) {
+        const button = grid.createEl("button", {
+          cls: "npt-icon-option",
+          attr: { type: "button", title: iconId, "aria-label": iconId },
+        });
+        if (selected?.type === "lucide" && selected.value === iconId) button.addClass("is-selected");
+        setIcon(button, iconId);
+        button.addEventListener("click", () => this.finish(`lucide:${iconId}`));
+      }
+      renderedCount += nextIcons.length;
+    };
+
+    const renderGrid = () => {
+      grid.empty();
+      grid.scrollTop = 0;
+      const query = textValue(input.value).toLocaleLowerCase();
+      matches = query ? iconIds.filter((iconId) => iconId.includes(query)) : iconIds;
+      renderedCount = 0;
+      if (matches.length === 0) {
+        grid.createDiv({ text: "没有匹配的图标", cls: "npt-icon-picker-empty" });
+        return;
+      }
+      appendNextBatch();
+    };
+
+    input.addEventListener("input", renderGrid);
+    grid.addEventListener("scroll", () => {
+      if (renderedCount >= matches.length) return;
+      if (grid.scrollTop + grid.clientHeight >= grid.scrollHeight - 80) appendNextBatch();
+    });
+    renderGrid();
+    this.contentEl.win.setTimeout(() => input.focus(), 0);
+  }
+
+  renderEmojiMode() {
+    const inputRow = this.modeContentEl.createDiv({ cls: "npt-emoji-input-row" });
+    const input = inputRow.createEl("input", {
+      attr: { type: "text", placeholder: "输入 Emoji", "aria-label": "输入 Emoji" },
+    });
+    const selected = parsePageIcon(this.currentIcon);
+    if (selected?.type === "emoji") input.value = selected.value;
+    const applyButton = inputRow.createEl("button", {
+      cls: "clickable-icon npt-emoji-apply",
+      attr: { type: "button", title: "使用输入的 Emoji", "aria-label": "使用输入的 Emoji" },
+    });
+    setIcon(applyButton, "check");
+
+    const applyInput = () => {
+      const icon = normalizePageIcon(`emoji:${input.value}`);
+      if (icon) this.finish(icon);
+    };
+    const updateApplyState = () => {
+      applyButton.disabled = !normalizePageIcon(`emoji:${input.value}`);
+    };
+    input.addEventListener("input", updateApplyState);
+    input.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      applyInput();
+    });
+    applyButton.addEventListener("click", applyInput);
+    updateApplyState();
+
+    const grid = this.modeContentEl.createDiv({ cls: "npt-icon-grid npt-emoji-grid" });
+    for (const emoji of COMMON_PAGE_EMOJIS) {
+      const button = grid.createEl("button", {
+        text: emoji,
+        cls: "npt-icon-option is-emoji",
+        attr: { type: "button", title: emoji, "aria-label": emoji },
+      });
+      if (selected?.type === "emoji" && selected.value === emoji) button.addClass("is-selected");
+      button.addEventListener("click", () => this.finish(`emoji:${emoji}`));
+    }
+    this.contentEl.win.setTimeout(() => input.focus(), 0);
+  }
+
+  finish(icon) {
+    this.resolved = true;
+    this.resolveIcon(icon);
+    this.close();
+  }
+
+  onClose() {
+    this.modalEl.removeClass("npt-icon-picker-modal");
+    this.contentEl.empty();
+    if (!this.resolved) this.resolveIcon(undefined);
+  }
+}
+
 class ConfirmModal extends Modal {
   constructor(app, title, message, confirmLabel, resolve) {
     super(app);
@@ -897,6 +1187,12 @@ class ConfirmModal extends Modal {
 function promptForText(app, title, initialValue = "", placeholder = "未命名页面") {
   return new Promise((resolve) => {
     new TextPromptModal(app, title, initialValue, placeholder, resolve).open();
+  });
+}
+
+function pickPageIcon(app, node) {
+  return new Promise((resolve) => {
+    new PageIconPickerModal(app, node, resolve).open();
   });
 }
 
@@ -1086,7 +1382,7 @@ class PageTreeView extends ItemView {
     }
 
     const pageIcon = row.createSpan({ cls: "npt-row-icon" });
-    setIcon(pageIcon, "file-text");
+    renderPageIcon(pageIcon, node.icon);
     row.createSpan({ text: node.title, cls: "npt-row-title", attr: { title: node.title } });
     if (rowData.invalid) {
       const warning = row.createSpan({
@@ -1128,6 +1424,9 @@ class PageTreeView extends ItemView {
     );
     menu.addItem((item) =>
       item.setTitle("在新标签页打开").setIcon("panel-top-open").onClick(() => this.plugin.openPage(node, true)),
+    );
+    menu.addItem((item) =>
+      item.setTitle("更换图标").setIcon("palette").onClick(() => this.plugin.changePageIconFromPrompt(node.id)),
     );
     menu.addItem((item) =>
       item.setTitle("重命名").setIcon("pencil").onClick(() => this.plugin.renamePageFromPrompt(node.id)),
@@ -1274,7 +1573,7 @@ class PageTreeView extends ItemView {
   }
 }
 
-class NestedPageTreeSettingTab extends PluginSettingTab {
+class LengendCreatorSettingTab extends PluginSettingTab {
   constructor(app, plugin) {
     super(app, plugin);
     this.plugin = plugin;
@@ -1319,7 +1618,7 @@ class NestedPageTreeSettingTab extends PluginSettingTab {
   }
 }
 
-class NestedPageTreePlugin extends Plugin {
+class LengendCreatorPlugin extends Plugin {
   async onload() {
     const loaded = (await this.loadData()) || {};
     const previousManagedFolder = textValue(loaded.managedFolder);
@@ -1348,7 +1647,7 @@ class NestedPageTreePlugin extends Plugin {
 
     this.registerView(VIEW_TYPE, (leaf) => new PageTreeView(leaf, this));
     this.addRibbonIcon("list-tree", "打开页面树", () => this.activateView());
-    this.addSettingTab(new NestedPageTreeSettingTab(this.app, this));
+    this.addSettingTab(new LengendCreatorSettingTab(this.app, this));
 
     this.addCommand({
       id: "open-page-tree",
@@ -1505,7 +1804,7 @@ class NestedPageTreePlugin extends Plugin {
       return await action();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.error("Nested Page Tree:", error);
+      console.error("Lengend Creator:", error);
       new Notice(`页面树操作失败：${message}`);
       return null;
     }
@@ -1572,6 +1871,16 @@ class NestedPageTreePlugin extends Plugin {
     });
   }
 
+  async changePageIconFromPrompt(id) {
+    await this.runAction(async () => {
+      const node = this.repository.getNode(id);
+      if (!node) return;
+      const icon = await pickPageIcon(this.app, node);
+      if (icon === undefined || icon === node.icon) return;
+      await this.repository.setPageIcon(id, icon);
+    });
+  }
+
   async deletePageFromPrompt(id) {
     await this.runAction(async () => {
       const node = this.repository.getNode(id);
@@ -1599,12 +1908,13 @@ class NestedPageTreePlugin extends Plugin {
   }
 }
 
-module.exports = NestedPageTreePlugin;
+module.exports = LengendCreatorPlugin;
 module.exports.__test = {
   buildPhysicalLayoutPlan,
   buildVisibleRows,
   compareNodes,
   computeOrderAt,
+  normalizePageIcon,
   parsePageMetadata,
   sanitizeFileName,
   wouldCreateCycle,

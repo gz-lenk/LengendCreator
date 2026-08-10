@@ -19,6 +19,8 @@ Module._load = function load(request, parent, isMain) {
       Setting: EmptyBase,
       TFile,
       TFolder,
+      getIcon: () => null,
+      getIconIds: () => [],
       normalizePath: (value) => value.replace(/\\/g, "/").replace(/\/+/g, "/"),
       setIcon: () => undefined,
     };
@@ -32,6 +34,7 @@ const {
   buildPhysicalLayoutPlan,
   buildVisibleRows,
   computeOrderAt,
+  normalizePageIcon,
   parsePageMetadata,
   sanitizeFileName,
   wouldCreateCycle,
@@ -39,6 +42,13 @@ const {
 
 assert.equal(sanitizeFileName('  North: \\ / * ? " < > |  '), "North");
 assert.equal(sanitizeFileName("..."), "Untitled");
+assert.equal(normalizePageIcon("lucide:Castle"), "lucide:castle");
+assert.equal(normalizePageIcon("emoji: 🏰 "), "emoji:🏰");
+assert.equal(normalizePageIcon("emoji:🇨🇳"), "emoji:🇨🇳");
+assert.equal(normalizePageIcon("castle"), null);
+assert.equal(normalizePageIcon("lucide:bad icon"), null);
+assert.equal(normalizePageIcon("emoji:castle"), null);
+assert.equal(normalizePageIcon("emoji:🏰🌍"), null);
 
 assert.equal(computeOrderAt([], 0), 1024);
 assert.equal(computeOrderAt([{ order: 1024 }], 1), 2048);
@@ -59,12 +69,14 @@ const parsed = parsePageMetadata(file, {
   "page-tree-id": "north",
   "page-tree-parent": "world",
   "page-tree-order": "2048",
+  "page-tree-icon": "lucide:castle",
   title: "Northern Kingdom",
 });
 assert.equal(parsed.id, "north");
 assert.equal(parsed.parentId, "world");
 assert.equal(parsed.order, 2048);
 assert.equal(parsed.title, "Northern Kingdom");
+assert.equal(parsed.icon, "lucide:castle");
 
 const nodes = new Map([
   ["world", { id: "world", parentId: null, order: 1024, title: "World", file: { path: "World.md" } }],
