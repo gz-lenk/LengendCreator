@@ -1,39 +1,47 @@
-# Nested Page Tree
+# Lengend Creator
 
-Nested Page Tree is an Obsidian plugin that presents ordinary Markdown notes as an arbitrarily nestable page tree. The tree is reconstructed from YAML properties in the notes; plugin data only stores settings and expanded UI state.
+Lengend Creator 是一个面向 Obsidian 的知识组织插件，目标是在保留普通 Markdown 文件和真实文件系统的前提下，提供接近 LegendKeeper 的页面式创作体验。
 
-## Features
+用户只需要关注页面、子页面和内容之间的关系，不必手动规划文件夹、移动文件或维护复杂的本地目录。插件负责将逻辑页面树同步为清晰、可访问的物理文件结构，数据不会脱离 Obsidian Vault。
 
-- Custom page tree in the left sidebar.
-- Create root pages and child pages without managing folders.
-- Open, rename and delete managed pages.
-- Drag a page onto another page to make it a child.
-- Drag near the top or bottom of a page to reorder it among siblings.
-- Detect missing parents and cycles without hiding affected notes.
-- Adopt an existing Markdown note from the native file menu.
-- React to external YAML edits, file renames and file deletions.
-- Hide plugin-managed properties above the note while keeping their YAML data intact.
-- Mirror the logical page tree into ordinary folders under `main`.
-- Works without Node.js or desktop-only APIs at runtime.
+> 项目目前处于早期开发阶段。第一个核心功能 Page Tree 已经完成，Icon System 是下一个主要开发阶段。
 
-## Storage
+## 项目目标
 
-Pages remain ordinary Markdown files. The plugin owns the `main` folder and derives its physical layout from the logical page tree:
+- 用可无限嵌套的页面树代替手动文件夹管理。
+- 每个页面仍然是普通 Markdown 文件，可被 Obsidian 和其他工具直接读取。
+- 逻辑层级与本地文件结构保持一致，不创建脱离 Vault 的虚拟树。
+- 页面移动、重命名和层级变化由插件自动同步到文件系统。
+- 在 Obsidian 原生体验之上逐步增加图标、视觉识别和世界构建工具。
 
-```text
-main/
-  Home/
-    Home.md
-    Child 1.md
-    Child 2/
-      Child 2.md
-      Grandchild.md
-  Another root.md
-```
+## 当前进度
 
-A leaf page is stored directly as `Page title.md`. As soon as it gains a child, it is promoted to `Page title/Page title.md`; when its last child leaves, it is demoted to a single Markdown file again. Users can therefore work entirely in the page tree without managing folders.
+### 已完成：Page Tree
 
-The logical hierarchy is stored as YAML:
+- 在左侧边栏提供独立页面树。
+- 支持任意深度的页面和子页面嵌套。
+- 支持新建、打开、重命名和删除页面。
+- 支持拖拽调整层级、顺序以及移动到顶层。
+- 支持搜索、键盘导航、折叠和定位当前页面。
+- 可以从 Obsidian 原生文件菜单将已有 Markdown 笔记加入页面树。
+- 使用稳定页面 ID 维护父子关系，并检测父页面缺失和循环层级。
+- 自动隐藏插件管理的 YAML 属性，同时保留 Markdown 中的原始数据。
+- 文档标题、页面树标题、文件名和物理路径保持同步。
+- 自动将逻辑页面树映射到 `main` 下的真实文件夹结构。
+
+### 下一阶段：Icon System
+
+计划为每个页面增加独立图标，并提供：
+
+- 可搜索的 Obsidian 原生 Lucide 图标选择器。
+- 可选 Emoji 图标。
+- 清除图标和恢复默认图标。
+- 图标作为独立页面属性保存，不进入标题或文件名。
+- 图标失效时自动回退到默认页面图标。
+
+## 页面存储模型
+
+页面层级保存在 Markdown 的 YAML 属性中：
 
 ```yaml
 ---
@@ -41,31 +49,81 @@ page-tree: true
 page-tree-id: 78df83c4-5ba3-4cf7-8d08-143a079ce721
 page-tree-parent: 50cc3318-8d7e-4bf6-9099-b94fae8f7703
 page-tree-order: 2048
-title: Northern Kingdom
+title: 子页面
 ---
 ```
 
-Root pages omit `page-tree-parent`. A stable ID keeps the hierarchy intact when a file is renamed or moved. Duplicate IDs caused by copying a managed note are repaired when the index is rebuilt.
+顶层页面不包含 `page-tree-parent`。稳定 ID 可以保证文件重命名或移动后，页面关系仍然有效。
 
-## Usage
+物理文件统一由插件维护在 `main` 目录中：
 
-Enable the plugin and open **Nested Page Tree: Open page tree** from the command palette. Use the plus button to create a root page, or open a page's context menu to create a child.
+```text
+main/
+  主页1/
+    主页1.md
+    子页面1.md
+    子页面2/
+      子页面2.md
+      孙页面.md
+  另一个主页.md
+```
 
-During drag and drop:
+存储规则：
 
-- Drop in the middle of a row to make the page a child.
-- Drop near the top or bottom edge to place it before or after that page.
-- Drop on the **Move to root** target to return it to the top level.
+- 没有子页面时，页面保存为当前层级中的 `页面名.md`。
+- 获得第一个子页面时，自动升级为 `页面名/页面名.md`。
+- 最后一个子页面被移走或删除时，自动降级回单个 Markdown 文件。
+- 重命名或移动父页面时，其物理目录和全部后代路径会一起更新。
+- 发生同名或磁盘路径冲突时，插件会自动分配安全的数字后缀。
 
-Existing Markdown notes can be added through the native file explorer context menu. Once adopted, the plugin moves them into the managed `main` layout.
+## 使用方式
 
-## Development
+启用插件后，在命令面板执行 **Nested Page Tree: 打开页面树**，也可以点击左侧功能区的页面树图标。
 
-The plugin intentionally ships as plain JavaScript, so Obsidian can load it directly without a local build toolchain.
+- 点击工具栏中的加号创建顶层页面。
+- 右键页面可以创建子页面、重命名、移动到顶层或删除。
+- 拖到页面行中部会成为其子页面。
+- 拖到页面行上方或下方会调整同级顺序。
+- Markdown 文件可以通过 Obsidian 文件列表的右键菜单加入页面树。
+
+## 安装
+
+项目尚未发布到 Obsidian 社区插件市场。手动安装时，将以下运行文件放入 Vault 的 `.obsidian/plugins/nested-page-tree/`：
+
+```text
+main.js
+manifest.json
+styles.css
+```
+
+然后重新加载 Obsidian，并在“设置 → 第三方插件”中启用 **Nested Page Tree**。
+
+## 开发
+
+项目当前使用可被 Obsidian 直接加载的 JavaScript，不需要在运行时安装 Node.js 或桌面端专用依赖。
 
 ```sh
 npm run check
 npm test
 ```
 
-Runtime files are `manifest.json`, `main.js`, and `styles.css`.
+核心文件：
+
+- `main.js`：页面模型、物理目录协调器和页面树交互。
+- `styles.css`：页面树及弹窗样式。
+- `tests/core.test.cjs`：层级、排序、循环检测和物理路径规划测试。
+- `manifest.json`：Obsidian 插件清单。
+
+最低 Obsidian 版本为 `1.7.2`，插件不依赖桌面端专用 API。
+
+## Roadmap
+
+- [x] Page Tree：无限页面嵌套与真实目录同步。
+- [x] 页面创建、重命名、拖拽、删除和搜索。
+- [x] YAML 管理属性自动隐藏。
+- [x] 逻辑树与 `main` 物理目录双向协调。
+- [ ] Icon System：原生图标与 Emoji。
+- [ ] 更完整的页面外观与编辑体验。
+- [ ] 发布、迁移和恢复工具。
+
+在项目进入稳定版本之前，建议使用 Git、Obsidian 文件恢复或其他备份方式保护 Vault。
