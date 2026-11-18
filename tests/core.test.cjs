@@ -33,6 +33,7 @@ const PluginClass = require("../main.js");
 const {
   buildPhysicalLayoutPlan,
   buildVisibleRows,
+  canDropPage,
   computeOrderAt,
   normalizePageIcon,
   parsePageMetadata,
@@ -62,6 +63,11 @@ const cycleNodes = new Map([
 ]);
 assert.equal(wouldCreateCycle(cycleNodes, "a", "c"), true);
 assert.equal(wouldCreateCycle(cycleNodes, "c", null), false);
+assert.equal(canDropPage(cycleNodes, "a", "c", "inside"), false);
+assert.equal(canDropPage(cycleNodes, "a", "c", "before"), false);
+assert.equal(canDropPage(cycleNodes, "c", "a", "inside"), true);
+assert.equal(canDropPage(cycleNodes, "c", "c", "inside"), false);
+assert.equal(canDropPage(cycleNodes, "c", "a", "unknown"), false);
 
 const file = { path: "Page Tree/North.md", basename: "North" };
 const parsed = parsePageMetadata(file, {

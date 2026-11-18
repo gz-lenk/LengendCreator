@@ -214,6 +214,16 @@ function wouldCreateCycle(nodesById, nodeId, candidateParentId) {
   return false;
 }
 
+function canDropPage(nodesById, nodeId, targetId, mode) {
+  if (!["before", "inside", "after"].includes(mode)) return false;
+  const node = nodesById.get(nodeId);
+  const target = nodesById.get(targetId);
+  if (!node || !target || node.id === target.id) return false;
+
+  const candidateParentId = mode === "inside" ? target.id : target.parentId;
+  return !wouldCreateCycle(nodesById, node.id, candidateParentId);
+}
+
 function computeOrderAt(siblings, requestedIndex) {
   const index = Math.max(0, Math.min(requestedIndex, siblings.length));
   const previous = index > 0 ? siblings[index - 1].order : null;
@@ -1211,6 +1221,14 @@ class PageTreeView extends ItemView {
     this.query = "";
     this.activeId = null;
     this.draggedId = null;
+    this.pointerDrag = null;
+    this.dropTarget = null;
+    this.dragPreviewEl = null;
+    this.autoExpandTimer = null;
+    this.autoExpandTargetId = null;
+    this.dragScrollFrame = null;
+    this.dragScrollVelocity = 0;
+    this.suppressClick = false;
     this.renderFrame = null;
     this.rowElements = new Map();
     this.visibleRows = [];
@@ -1258,23 +1276,9 @@ class PageTreeView extends ItemView {
       this.scheduleRender();
     });
 
-    this.rootDropZone = this.contentEl.createDiv({ text: "移至顶层", cls: "npt-root-drop-zone" });
-    this.registerDomEvent(this.rootDropZone, "dragover", (event) => {
-      if (!this.draggedId) return;
-      event.preventDefault();
-      this.rootDropZone.addClass("is-drag-over");
-    });
-    this.registerDomEvent(this.rootDropZone, "dragleave", () => {
-      this.rootDropZone.removeClass("is-drag-over");
-    });
-    this.registerDomEvent(this.rootDropZone, "drop", (event) => {
-      event.preventDefault();
-      const id = this.draggedId;
-      this.finishDragging();
-      if (id) this.plugin.runAction(() => this.repository.moveToRoot(id));
-    });
-
-    this.listEl = this.contentEl.createDiv({ cls: "npt-tree-list" });
+    const treeBody = this.contentEl.createDiv({ cls: "npt-tree-body" });
+    this.rootDropZone = treeBody.createDiv({ text: "移至顶层", cls: "npt-root-drop-zone" });
+    this.listEl = treeBody.createDiv({ cls: "npt-tree-list" });
     const unsubscribe = this.repository.subscribe(() => this.scheduleRender());
     this.register(unsubscribe);
     this.setActiveFile(this.app.workspace.getActiveFile());
@@ -1282,6 +1286,7 @@ class PageTreeView extends ItemView {
   }
 
   async onClose() {
+    this.finishDragging();
     if (this.renderFrame !== null) {
       this.contentEl.win.cancelAnimationFrame(this.renderFrame);
       this.renderFrame = null;
@@ -1354,7 +1359,6 @@ class PageTreeView extends ItemView {
     const hasChildren = this.repository.getChildren(node.id).length > 0;
     const row = this.listEl.createDiv({ cls: "npt-tree-row", attr: { "data-page-id": node.id } });
     row.tabIndex = node.id === this.activeId ? 0 : -1;
-    row.draggable = true;
     if (node.id === this.activeId) row.addClass("is-active");
     if (rowData.invalid) row.addClass("is-invalid");
     this.rowElements.set(node.id, row);
@@ -1392,7 +1396,14 @@ class PageTreeView extends ItemView {
       setIcon(warning, "circle-alert");
     }
 
-    row.addEventListener("click", (event) => this.plugin.openPage(node, event));
+    row.addEventListener("click", (event) => {
+      if (this.suppressClick) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      this.plugin.openPage(node, event);
+    });
     row.addEventListener("dblclick", (event) => {
       if (typeof event.target?.closest === "function" && event.target.closest("button")) return;
       event.preventDefault();
@@ -1400,11 +1411,7 @@ class PageTreeView extends ItemView {
     });
     row.addEventListener("contextmenu", (event) => this.showContextMenu(event, node));
     row.addEventListener("keydown", (event) => this.handleRowKeydown(event, node));
-    row.addEventListener("dragstart", (event) => this.startDragging(event, node.id));
-    row.addEventListener("dragend", () => this.finishDragging());
-    row.addEventListener("dragover", (event) => this.handleDragOver(event, row));
-    row.addEventListener("dragleave", () => this.clearDropClasses(row));
-    row.addEventListener("drop", (event) => this.handleDrop(event, node.id, row));
+    row.addEventListener("pointerdown", (event) => this.handlePointerDown(event, node.id, row));
   }
 
   toggleExpanded(id) {
@@ -1498,50 +1505,288 @@ class PageTreeView extends ItemView {
     }
   }
 
-  startDragging(event, id) {
-    this.draggedId = id;
-    this.contentEl.addClass("is-dragging");
-    if (event.dataTransfer) {
-      event.dataTransfer.effectAllowed = "move";
-      event.dataTransfer.setData("text/plain", id);
+  handlePointerDown(event, id, row) {
+    if (event.button !== 0 || event.isPrimary === false || this.pointerDrag) return;
+    if (typeof event.target?.closest === "function" && event.target.closest("button, input")) return;
+
+    const workspaceDocument = row.ownerDocument;
+    const drag = {
+      active: false,
+      clientX: event.clientX,
+      clientY: event.clientY,
+      id,
+      onCancel: null,
+      onMove: null,
+      onUp: null,
+      pointerId: event.pointerId,
+      sourceRow: row,
+      startX: event.clientX,
+      startY: event.clientY,
+      workspaceDocument,
+    };
+    drag.onMove = (moveEvent) => this.handlePointerMove(moveEvent);
+    drag.onUp = (upEvent) => this.handlePointerUp(upEvent);
+    drag.onCancel = (cancelEvent) => this.handlePointerCancel(cancelEvent);
+    this.pointerDrag = drag;
+    workspaceDocument.addEventListener("pointermove", drag.onMove, { capture: true, passive: false });
+    workspaceDocument.addEventListener("pointerup", drag.onUp, { capture: true });
+    workspaceDocument.addEventListener("pointercancel", drag.onCancel, { capture: true });
+  }
+
+  handlePointerMove(event) {
+    const drag = this.pointerDrag;
+    if (!drag || event.pointerId !== drag.pointerId) return;
+    drag.clientX = event.clientX;
+    drag.clientY = event.clientY;
+
+    if (!drag.active) {
+      const distance = Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY);
+      if (distance < 6) return;
+      this.startDragging(drag);
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    this.positionDragPreview(event.clientX, event.clientY);
+    this.updateDropTarget(event.clientX, event.clientY);
+    this.updateDragScroll(event.clientY);
+  }
+
+  handlePointerUp(event) {
+    const drag = this.pointerDrag;
+    if (!drag || event.pointerId !== drag.pointerId) return;
+    const wasActive = drag.active;
+    const draggedId = drag.id;
+    const dropTarget = this.dropTarget;
+
+    if (wasActive) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+    this.finishDragging();
+    if (!wasActive) return;
+
+    this.suppressClick = true;
+    this.contentEl.win.setTimeout(() => {
+      this.suppressClick = false;
+    }, 0);
+
+    if (dropTarget?.type === "root") {
+      void this.plugin.runAction(() => this.repository.moveToRoot(draggedId));
+    } else if (dropTarget?.type === "row") {
+      void this.plugin.runAction(() =>
+        this.repository.movePage(draggedId, dropTarget.targetId, dropTarget.mode),
+      );
     }
   }
 
+  handlePointerCancel(event) {
+    const drag = this.pointerDrag;
+    if (!drag || event.pointerId !== drag.pointerId) return;
+    if (drag.active) {
+      event.preventDefault();
+      this.suppressClick = true;
+      this.contentEl.win.setTimeout(() => {
+        this.suppressClick = false;
+      }, 0);
+    }
+    this.finishDragging();
+  }
+
+  startDragging(drag) {
+    drag.active = true;
+    this.draggedId = drag.id;
+    this.contentEl.addClass("is-dragging");
+    this.contentEl.toggleClass("can-drop-root", Boolean(this.repository.getNode(drag.id)?.parentId));
+    drag.sourceRow.addClass("is-drag-source");
+    if (typeof drag.sourceRow.setPointerCapture === "function") {
+      try {
+        drag.sourceRow.setPointerCapture(drag.pointerId);
+      } catch (_error) {
+        // Document-level listeners still keep desktop dragging functional.
+      }
+    }
+    this.createDragPreview(drag);
+  }
+
+  createDragPreview(drag) {
+    const node = this.repository.getNode(drag.id);
+    if (!node) return;
+
+    const preview = drag.workspaceDocument.createElement("div");
+    preview.className = "npt-drag-preview";
+    const icon = drag.workspaceDocument.createElement("span");
+    icon.className = "npt-drag-preview-icon";
+    renderPageIcon(icon, node.icon);
+    const title = drag.workspaceDocument.createElement("span");
+    title.className = "npt-drag-preview-title";
+    title.textContent = node.title;
+    preview.append(icon, title);
+    drag.workspaceDocument.body.appendChild(preview);
+    this.dragPreviewEl = preview;
+    this.positionDragPreview(drag.clientX, drag.clientY);
+  }
+
+  positionDragPreview(clientX, clientY) {
+    if (!this.dragPreviewEl) return;
+    this.dragPreviewEl.style.left = `${clientX + 14}px`;
+    this.dragPreviewEl.style.top = `${clientY + 12}px`;
+  }
+
   finishDragging() {
+    const drag = this.pointerDrag;
+    if (drag) {
+      if (
+        typeof drag.sourceRow.hasPointerCapture === "function" &&
+        typeof drag.sourceRow.releasePointerCapture === "function" &&
+        drag.sourceRow.hasPointerCapture(drag.pointerId)
+      ) {
+        drag.sourceRow.releasePointerCapture(drag.pointerId);
+      }
+      drag.workspaceDocument.removeEventListener("pointermove", drag.onMove, { capture: true });
+      drag.workspaceDocument.removeEventListener("pointerup", drag.onUp, { capture: true });
+      drag.workspaceDocument.removeEventListener("pointercancel", drag.onCancel, { capture: true });
+    }
+    this.pointerDrag = null;
     this.draggedId = null;
-    this.contentEl.removeClass("is-dragging");
+    this.dropTarget = null;
+    this.contentEl.removeClass("is-dragging", "can-drop-root");
+    this.clearDropFeedback();
+    this.clearAutoExpand();
+    this.stopDragScroll();
+    this.dragPreviewEl?.remove();
+    this.dragPreviewEl = null;
+  }
+
+  clearDropClasses(row) {
+    row.removeClass("is-drop-before", "is-drop-inside", "is-drop-after", "is-drop-invalid");
+  }
+
+  clearDropFeedback() {
     this.rootDropZone?.removeClass("is-drag-over");
     for (const row of this.rowElements.values()) this.clearDropClasses(row);
   }
 
-  clearDropClasses(row) {
-    row.removeClass("is-drop-before", "is-drop-inside", "is-drop-after");
-  }
-
-  getDropMode(event, row) {
+  getDropMode(clientY, row) {
     const rect = row.getBoundingClientRect();
-    const ratio = rect.height > 0 ? (event.clientY - rect.top) / rect.height : 0.5;
+    const ratio = rect.height > 0 ? (clientY - rect.top) / rect.height : 0.5;
     if (ratio < 0.25) return "before";
     if (ratio > 0.75) return "after";
     return "inside";
   }
 
-  handleDragOver(event, row) {
-    if (!this.draggedId) return;
-    event.preventDefault();
-    event.stopPropagation();
-    if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
-    this.clearDropClasses(row);
-    row.addClass(`is-drop-${this.getDropMode(event, row)}`);
+  updateDropTarget(clientX, clientY) {
+    const drag = this.pointerDrag;
+    if (!drag?.active) return;
+    this.clearDropFeedback();
+    this.dropTarget = null;
+
+    const element = drag.workspaceDocument.elementFromPoint(clientX, clientY);
+    if (!element) {
+      this.clearAutoExpand();
+      return;
+    }
+
+    const rootZone = typeof element.closest === "function" ? element.closest(".npt-root-drop-zone") : null;
+    const draggedNode = this.repository.getNode(drag.id);
+    if (rootZone && draggedNode?.parentId) {
+      this.rootDropZone.addClass("is-drag-over");
+      this.dropTarget = { type: "root" };
+      this.clearAutoExpand();
+      return;
+    }
+
+    const row = typeof element.closest === "function" ? element.closest(".npt-tree-row") : null;
+    if (!row || !this.listEl.contains(row)) {
+      this.clearAutoExpand();
+      return;
+    }
+
+    const targetId = row.getAttribute("data-page-id");
+    const mode = this.getDropMode(clientY, row);
+    if (!canDropPage(this.repository.nodesById, drag.id, targetId, mode)) {
+      row.addClass("is-drop-invalid");
+      this.clearAutoExpand();
+      return;
+    }
+
+    row.addClass(`is-drop-${mode}`);
+    this.dropTarget = { type: "row", targetId, mode };
+    if (mode === "inside") this.scheduleAutoExpand(targetId);
+    else this.clearAutoExpand();
   }
 
-  handleDrop(event, targetId, row) {
-    event.preventDefault();
-    event.stopPropagation();
-    const draggedId = this.draggedId || event.dataTransfer?.getData("text/plain");
-    const mode = this.getDropMode(event, row);
-    this.finishDragging();
-    if (draggedId) this.plugin.runAction(() => this.repository.movePage(draggedId, targetId, mode));
+  scheduleAutoExpand(targetId) {
+    const hasChildren = this.repository.getChildren(targetId).length > 0;
+    const expandedIds = this.plugin.getExpandedIds();
+    if (!hasChildren || expandedIds.has(targetId)) {
+      this.clearAutoExpand();
+      return;
+    }
+    if (this.autoExpandTargetId === targetId && this.autoExpandTimer !== null) return;
+
+    this.clearAutoExpand();
+    this.autoExpandTargetId = targetId;
+    this.autoExpandTimer = this.contentEl.win.setTimeout(() => {
+      this.autoExpandTimer = null;
+      if (!this.pointerDrag?.active || this.autoExpandTargetId !== targetId) return;
+      const nextExpandedIds = this.plugin.getExpandedIds();
+      nextExpandedIds.add(targetId);
+      this.plugin.setExpandedIds(nextExpandedIds);
+      this.renderNow();
+      this.pointerDrag.sourceRow = this.rowElements.get(this.pointerDrag.id) || this.pointerDrag.sourceRow;
+      this.pointerDrag.sourceRow?.addClass("is-drag-source");
+      this.updateDropTarget(this.pointerDrag.clientX, this.pointerDrag.clientY);
+    }, 650);
+  }
+
+  clearAutoExpand() {
+    if (this.autoExpandTimer !== null) {
+      this.contentEl.win.clearTimeout(this.autoExpandTimer);
+      this.autoExpandTimer = null;
+    }
+    this.autoExpandTargetId = null;
+  }
+
+  updateDragScroll(clientY) {
+    if (!this.listEl || !this.pointerDrag?.active) return;
+    const rect = this.listEl.getBoundingClientRect();
+    if (clientY < rect.top || clientY > rect.bottom) {
+      this.stopDragScroll();
+      return;
+    }
+    const edgeSize = Math.min(42, rect.height / 4);
+    let velocity = 0;
+    if (clientY < rect.top + edgeSize) {
+      velocity = -Math.ceil(((rect.top + edgeSize - clientY) / edgeSize) * 14);
+    } else if (clientY > rect.bottom - edgeSize) {
+      velocity = Math.ceil(((clientY - (rect.bottom - edgeSize)) / edgeSize) * 14);
+    }
+    this.dragScrollVelocity = velocity;
+    if (velocity === 0) {
+      this.stopDragScroll();
+      return;
+    }
+    if (this.dragScrollFrame !== null) return;
+
+    const scrollStep = () => {
+      this.dragScrollFrame = null;
+      if (!this.pointerDrag?.active || this.dragScrollVelocity === 0) return;
+      const previousScroll = this.listEl.scrollTop;
+      this.listEl.scrollTop += this.dragScrollVelocity;
+      if (this.listEl.scrollTop === previousScroll) return;
+      this.updateDropTarget(this.pointerDrag.clientX, this.pointerDrag.clientY);
+      this.dragScrollFrame = this.contentEl.win.requestAnimationFrame(scrollStep);
+    };
+    this.dragScrollFrame = this.contentEl.win.requestAnimationFrame(scrollStep);
+  }
+
+  stopDragScroll() {
+    this.dragScrollVelocity = 0;
+    if (this.dragScrollFrame !== null) {
+      this.contentEl.win.cancelAnimationFrame(this.dragScrollFrame);
+      this.dragScrollFrame = null;
+    }
   }
 
   async revealPage(id) {
@@ -1912,6 +2157,7 @@ module.exports = LengendCreatorPlugin;
 module.exports.__test = {
   buildPhysicalLayoutPlan,
   buildVisibleRows,
+  canDropPage,
   compareNodes,
   computeOrderAt,
   normalizePageIcon,
